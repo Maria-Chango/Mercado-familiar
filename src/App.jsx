@@ -63,27 +63,33 @@ export default function App() {
   }, [user])
 
   const entrar = async (nombre) => {
-    const { data } = await supabase.from('usuarios').insert({ nombre }).select().single()
-    if (data) { localStorage.setItem('usuario', JSON.stringify(data)); setUser(data) }
+    const { data, error } = await supabase.from('usuarios').insert({ nombre }).select().single()
+    if (error) { alert('No se pudo entrar: ' + error.message); return }
+    localStorage.setItem('usuario', JSON.stringify(data)); setUser(data)
   }
 
-  // Acciones
+  // Acciones (cada una refresca la pantalla y muestra errores)
+  const run = async (q) => {
+    const { error } = await q
+    if (error) alert('Error: ' + error.message)
+    await cargar()
+  }
   const reportar = (p) =>
-    supabase.from('lista_compra_activa').insert({ producto_id: p.id, cantidad: p.cantidad, reportado_por: user.id })
+    run(supabase.from('lista_compra_activa').insert({ producto_id: p.id, cantidad: p.cantidad, reportado_por: user.id }))
   const tachar = (it) =>
-    supabase.from('lista_compra_activa')
-      .update({ comprado: !it.comprado, comprado_por: it.comprado ? null : user.id }).eq('id', it.id)
-  const quitar = (it) => supabase.from('lista_compra_activa').delete().eq('id', it.id)
+    run(supabase.from('lista_compra_activa')
+      .update({ comprado: !it.comprado, comprado_por: it.comprado ? null : user.id }).eq('id', it.id))
+  const quitar = (it) => run(supabase.from('lista_compra_activa').delete().eq('id', it.id))
   const editarPrecio = async (it) => {
     const actual = it.precio_real ?? it.productos_inventario.ultimo_precio
     const v = parseFloat((prompt('Precio real cobrado (por unidad):', actual) || '').replace(',', '.'))
     if (isNaN(v)) return
-    await supabase.from('lista_compra_activa').update({ precio_real: v }).eq('id', it.id)
-    await supabase.from('productos_inventario').update({ ultimo_precio: v }).eq('id', it.producto_id) // histórico
+    await run(supabase.from('lista_compra_activa').update({ precio_real: v }).eq('id', it.id))
+    await run(supabase.from('productos_inventario').update({ ultimo_precio: v }).eq('id', it.producto_id)) // histórico
   }
-  const limpiarComprados = () => supabase.from('lista_compra_activa').delete().eq('comprado', true)
+  const limpiarComprados = () => run(supabase.from('lista_compra_activa').delete().eq('comprado', true))
   const agregarProducto = (f) =>
-    supabase.from('productos_inventario').insert({ ...f, categoria: f.categoria || adivinarCategoria(f.nombre) })
+    run(supabase.from('productos_inventario').insert({ ...f, categoria: f.categoria || adivinarCategoria(f.nombre) }))
 
   // Presupuesto en vivo
   const precioDe = (it) => it.precio_real ?? it.productos_inventario?.ultimo_precio ?? 0
@@ -177,10 +183,10 @@ function Inventario({ productos, pendientes, onReportar, onAgregar }) {
     <main className="space-y-4 p-4">
       <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-3">
         <input className={`${inp} col-span-2`} placeholder="Producto (ej. Harina)" value={f.nombre} onChange={set('nombre')} />
-        <input className={inp} type="number" inputMode="decimal" placeholder="Cantidad" value={f.cantidad} onChange={set('cantidad')} />
-        <input className={inp} placeholder="Unidad" value={f.unidad} onChange={set('unidad')} />
-        <input className={inp} type="number" inputMode="decimal" step="0.01" placeholder="Precio $" value={f.ultimo_precio} onChange={set('ultimo_precio')} />
-        <input className={inp} placeholder="Categoría (auto)" value={f.categoria} onChange={set('categoria')} />
+        <label className="text-sm font-bold">Cantidad<input className={`${inp} w-full`} type="number" inputMode="decimal" value={f.cantidad} onChange={set('cantidad')} /></label>
+        <label className="text-sm font-bold">Unidad<input className={`${inp} w-full`} placeholder="fundas, libras" value={f.unidad} onChange={set('unidad')} /></label>
+        <label className="text-sm font-bold">Precio $ por unidad<input className={`${inp} w-full`} type="number" inputMode="decimal" step="0.01" value={f.ultimo_precio} onChange={set('ultimo_precio')} /></label>
+        <label className="text-sm font-bold">Categoría (opcional)<input className={`${inp} w-full`} placeholder="se pone sola" value={f.categoria} onChange={set('categoria')} /></label>
         <button disabled={!f.nombre.trim()} onClick={() => { onAgregar({ ...f, cantidad: +f.cantidad, ultimo_precio: +f.ultimo_precio }); setF(vacio) }}
           className="col-span-2 h-14 rounded-2xl bg-green-700 text-lg font-bold text-white disabled:opacity-40">+ Agregar al inventario</button>
       </div>
