@@ -23,6 +23,8 @@ export default function App() {
   const [lista, setLista] = useState([])
   const [tab, setTab] = useState('lista')
   const [toast, setToast] = useState(null)
+  const [escaneando, setEscaneando] = useState(false)
+  const [prefill, setPrefill] = useState(null)
   const prodRef = useRef([])
   prodRef.current = productos
 
@@ -96,6 +98,30 @@ export default function App() {
   const agregarProducto = (f) =>
     run(supabase.from('productos_inventario').insert({ ...f, categoria: f.categoria || adivinarCategoria(f.nombre) }))
 
+  // Escáner: producto conocido -> solo pide cantidad; desconocido -> prellena el formulario
+  const alEscanear = async (codigo) => {
+    setEscaneando(false)
+    const p = productos.find((x) => x.codigo === codigo)
+    if (p) {
+      if (lista.some((i) => i.producto_id === p.id && !i.comprado)) return alert(`"${p.nombre}" ya está en la lista.`)
+      const c = parseFloat((prompt(`${p.nombre} · ${$(p.ultimo_precio)}\n¿Cuántas ${p.unidad} necesitas?`, p.cantidad) || '').replace(',', '.'))
+      if (isNaN(c) || c <= 0) return
+      await run(supabase.from('lista_compra_activa').insert({ producto_id: p.id, cantidad: c, reportado_por: user.id }))
+      setTab('lista')
+      return
+    }
+    let nombre = /^\d+$/.test(codigo) ? '' : codigo // QR con texto = nombre directo
+    if (/^\d+$/.test(codigo)) {
+      try {
+        const r = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(codigo)}.json?fields=product_name,brands`)
+        const j = await r.json()
+        if (j.status === 1) nombre = [j.product.product_name, j.product.brands?.split(',')[0]].filter(Boolean).join(' - ')
+      } catch {}
+    }
+    setTab('inv')
+    setPrefill({ nombre, codigo })
+  }
+
   // Presupuesto en vivo
   const precioDe = (it) => it.precio_real ?? it.productos_inventario?.ultimo_precio ?? 0
   const estimado = lista.reduce((s, it) => s + it.cantidad * precioDe(it), 0)
@@ -151,12 +177,18 @@ export default function App() {
           )}
         </main>
       ) : (
-        <Inventario productos={productos} pendientes={pendientes} onReportar={reportar} onAgregar={agregarProducto} onEditar={editarProducto} onEliminar={eliminarProducto} />
+        <Inventario productos={productos} pendientes={pendientes} onReportar={reportar} onAgregar={agregarProducto} onEditar={editarProducto} onEliminar={eliminarProducto} prefill={prefill} onPrefillUsado={() => setPrefill(null)} />
       )}
 
-      <nav className="fixed inset-x-0 bottom-0 mx-auto grid max-w-md grid-cols-2 gap-2 border-t bg-white p-3" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
-        {[['lista', `🧾 Lista (${lista.filter((i) => !i.comprado).length})`], ['inv', '📦 Inventario']].map(([k, l]) => (
-          <button key={k} onClick={() => setTab(k)} className={`h-14 rounded-2xl text-lg font-bold ${tab === k ? 'bg-green-700 text-white' : 'bg-stone-100'}`}>{l}</button>
+      {escaneando && <Escaner onCodigo={alEscanear} onCerrar={() => setEscaneando(false)} />}
+
+      <nav className="fixed inset-x-0 bottom-0 mx-auto grid max-w-md grid-cols-[1fr_auto_1fr] gap-2 border-t bg-white p-3" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
+        {[['lista', `🧾 Lista (${lista.filter((i) => !i.comprado).length})`]].map(([k, l]) => (
+          <button key={k} onClick={() => setTab(k)} className={`h-14 rounded-2xl text-base font-bold ${tab === k ? 'bg-green-700 text-white' : 'bg-stone-100'}`}>{l}</button>
+        ))}
+        <button onClick={() => setEscaneando(true)} className="h-14 w-16 rounded-2xl bg-amber-400 text-3xl shadow" aria-label="Escanear código">📷</button>
+        {[['inv', '📦 Inventario']].map(([k, l]) => (
+          <button key={k} onClick={() => setTab(k)} className={`h-14 rounded-2xl text-base font-bold ${tab === k ? 'bg-green-700 text-white' : 'bg-stone-100'}`}>{l}</button>
         ))}
       </nav>
     </div>
@@ -179,21 +211,28 @@ function Bienvenida({ onEntrar }) {
   )
 }
 
-function Inventario({ productos, pendientes, onReportar, onAgregar, onEditar, onEliminar }) {
-  const vacio = { nombre: '', cantidad: 1, unidad: 'fundas', ultimo_precio: 0, categoria: '' }
+function Inventario({ productos, pendientes, onReportar, onAgregar, onEditar, onEliminar, prefill, onPrefillUsado }) {
+  const vacio = { nombre: '', cantidad: 1, unidad: 'fundas', ultimo_precio: 0, categoria: '', codigo: '' }
   const [f, setF] = useState(vacio)
   const [editId, setEditId] = useState(null)
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
   const inp = 'h-12 rounded-xl border-2 border-stone-300 px-3 text-lg'
+  useEffect(() => {
+    if (!prefill) return
+    setF({ ...vacio, nombre: prefill.nombre, codigo: prefill.codigo })
+    setEditId(null)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    onPrefillUsado()
+  }, [prefill])
 
   const empezarEdicion = (p) => {
-    setF({ nombre: p.nombre, cantidad: p.cantidad, unidad: p.unidad, ultimo_precio: p.ultimo_precio, categoria: p.categoria })
+    setF({ nombre: p.nombre, cantidad: p.cantidad, unidad: p.unidad, ultimo_precio: p.ultimo_precio, categoria: p.categoria, codigo: p.codigo || '' })
     setEditId(p.id)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
   const cancelar = () => { setF(vacio); setEditId(null) }
   const guardar = () => {
-    const d = { ...f, cantidad: +f.cantidad, ultimo_precio: +f.ultimo_precio }
+    const d = { ...f, cantidad: +f.cantidad, ultimo_precio: +f.ultimo_precio, codigo: f.codigo || null }
     editId ? onEditar(editId, d) : onAgregar(d)
     cancelar()
   }
@@ -202,6 +241,7 @@ function Inventario({ productos, pendientes, onReportar, onAgregar, onEditar, on
     <main className="space-y-4 p-4">
       <div className={`grid grid-cols-2 gap-2 rounded-2xl bg-white p-3 ${editId ? 'border-4 border-amber-400' : ''}`}>
         {editId && <p className="col-span-2 text-lg font-extrabold text-amber-700">✏️ Editando producto</p>}
+        {f.codigo && <p className="col-span-2 rounded-xl bg-green-50 p-2 text-sm">📷 Código <b>{f.codigo}</b>. Escribe el precio solo esta vez; la próxima se llena automático.</p>}
         <input className={`${inp} col-span-2`} placeholder="Producto (ej. Harina)" value={f.nombre} onChange={set('nombre')} />
         <label className="text-sm font-bold">Cantidad<input className={`${inp} w-full`} type="number" inputMode="decimal" value={f.cantidad} onChange={set('cantidad')} /></label>
         <label className="text-sm font-bold">Unidad<input className={`${inp} w-full`} placeholder="fundas, libras" value={f.unidad} onChange={set('unidad')} /></label>
@@ -232,5 +272,32 @@ function Inventario({ productos, pendientes, onReportar, onAgregar, onEditar, on
         ))}
       </ul>
     </main>
+  )
+}
+
+function Escaner({ onCodigo, onCerrar }) {
+  const [err, setErr] = useState('')
+  useEffect(() => {
+    let sc, activo = true
+    import('html5-qrcode').then(({ Html5Qrcode }) => {
+      sc = new Html5Qrcode('lector')
+      sc.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 260, height: 160 } },
+        (txt) => { if (activo) { activo = false; sc.stop().catch(() => {}).finally(() => onCodigo(txt)) } },
+        () => {}
+      ).catch(() => setErr('No se pudo abrir la cámara. Permite el acceso a la cámara para este sitio.'))
+    })
+    return () => { activo = false; try { sc?.isScanning && sc.stop().catch(() => {}) } catch {} }
+  }, [])
+  return (
+    <div className="fixed inset-0 z-30 grid place-items-center bg-black/80 p-4">
+      <div className="w-full max-w-md rounded-3xl bg-white p-4">
+        <p className="mb-2 text-xl font-extrabold">📷 Apunta al código de barras o QR</p>
+        <div id="lector" className="overflow-hidden rounded-2xl" />
+        {err && <p className="mt-2 font-bold text-red-700">{err}</p>}
+        <button onClick={onCerrar} className="mt-3 h-14 w-full rounded-2xl bg-stone-800 text-lg font-bold text-white">Cerrar</button>
+      </div>
+    </div>
   )
 }
