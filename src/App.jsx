@@ -3,12 +3,16 @@ import { supabase } from './supabase'
 
 // Categorías auto-generadas por palabras clave (si no hay coincidencia: "Otros")
 const CATS = {
-  Granos: ['arroz', 'avena', 'lenteja', 'fréjol', 'frejol', 'maíz', 'quinua', 'cebada', 'harina', 'trigo', 'arveja'],
-  Lácteos: ['leche', 'queso', 'yogur', 'mantequilla', 'huevo'],
-  Limpieza: ['jabón', 'jabon', 'detergente', 'cloro', 'desinfectante', 'papel', 'suavizante', 'escoba'],
-  Carnes: ['pollo', 'carne', 'pescado', 'atún', 'atun', 'chancho', 'res'],
-  Verduras: ['papa', 'cebolla', 'tomate', 'zanahoria', 'ajo', 'plátano', 'platano'],
-  Abarrotes: ['aceite', 'azúcar', 'azucar', 'sal', 'fideo', 'pasta', 'café', 'cafe', 'sardina'],
+  Granos: ['arroz', 'avena', 'lenteja', 'fréjol', 'frejol', 'maíz', 'quinua', 'cebada', 'harina', 'trigo', 'arveja', 'arrocillo'],
+  Lácteos: ['leche', 'queso', 'yogur', 'mantequilla', 'huevos'],
+  Harinas: ['machica', 'harina', 'sopa de sobre'],
+  Especias: ['canela', 'paprica', 'clavo de olor'],
+  Reposteria: ['Gelatina', 'Chocolate', 'Hoja de chocolate'],
+  Limpieza: ['jabón de ropa', 'jabon de ropa', 'detergente', 'cloro', 'desinfectante', 'papel', 'suavizante', 'escoba'],
+  Aseo: ['hilo dental', 'algodón', 'algodon', 'liquido de pies', 'shampoo','jabón', 'jabon', 'enjuague vocal'],
+  Carnes: ['pollo', 'carne', 'pescado', 'atún', 'atun', 'salchicha', 'res', 'sardina'],
+  Verduras: ['papa', 'cebolla', 'tomate', 'zanahoria', 'ajo', 'plátano', 'platano', 'pimiento', 'hierbas', 'brocoli', 'rabano', 'remolacha', 'melloco', 'habas', ],
+  Abarrotes: ['aceite', 'lasaña', 'jugo de sobre', 'sazona todo', 'mayonesa', 'salsa china', 'azúcar', 'azucar', 'sal', 'fideo', 'pasta', 'café', 'cafe', 'tallarin', 'cabello de angel', 'salsa de tomate', 'galletas de sal'],
 }
 const adivinarCategoria = (n) => {
   const s = n.toLowerCase()
@@ -16,6 +20,22 @@ const adivinarCategoria = (n) => {
   return 'Otros'
 }
 const $ = (n) => '$' + Number(n || 0).toFixed(2)
+
+// Busca el nombre en bases públicas (alimentos, productos del hogar, cuidado personal)
+async function buscarNombre(codigo) {
+  for (const h of ['world.openfoodfacts.org', 'world.openproductsfacts.org', 'world.openbeautyfacts.org']) {
+    try {
+      const r = await fetch(`https://${h}/api/v2/product/${encodeURIComponent(codigo)}.json?fields=product_name,product_name_es,brands,quantity`)
+      const j = await r.json()
+      if (j.status === 1) {
+        const pr = j.product
+        const n = [pr.product_name_es || pr.product_name, pr.brands?.split(',')[0], pr.quantity].filter(Boolean).join(' ')
+        if (n) return n
+      }
+    } catch {}
+  }
+  return ''
+}
 
 export default function App() {
   const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('usuario') || 'null'))
@@ -98,10 +118,13 @@ export default function App() {
   const agregarProducto = (f) =>
     run(supabase.from('productos_inventario').insert({ ...f, categoria: f.categoria || adivinarCategoria(f.nombre) }))
 
-  // Escáner: producto conocido -> solo pide cantidad; desconocido -> prellena el formulario
-  const alEscanear = async (codigo) => {
+  // Escáner: conocido -> solo pide cantidad; desconocido -> busca nombre o lo pide una vez
+  const alEscanear = async (leido) => {
     setEscaneando(false)
-    const p = productos.find((x) => x.codigo === codigo)
+    const esUrl = /^https?:/i.test(leido)
+    const num = leido.match(/\d{8,14}/)
+    const codigo = esUrl && num ? num[0] : leido // URL con número adentro -> usa el número
+    const p = productos.find((x) => x.codigo === codigo || x.codigo === leido)
     if (p) {
       if (lista.some((i) => i.producto_id === p.id && !i.comprado)) return alert(`"${p.nombre}" ya está en la lista.`)
       const c = parseFloat((prompt(`${p.nombre} · ${$(p.ultimo_precio)}\n¿Cuántas ${p.unidad} necesitas?`, p.cantidad) || '').replace(',', '.'))
@@ -110,14 +133,15 @@ export default function App() {
       setTab('lista')
       return
     }
-    let nombre = /^\d+$/.test(codigo) ? '' : codigo // QR con texto = nombre directo
-    if (/^\d+$/.test(codigo)) {
-      try {
-        const r = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(codigo)}.json?fields=product_name,brands`)
-        const j = await r.json()
-        if (j.status === 1) nombre = [j.product.product_name, j.product.brands?.split(',')[0]].filter(Boolean).join(' - ')
-      } catch {}
+    let nombre = ''
+    if (/^\d{8,14}$/.test(codigo)) {
+      setToast('🔎 Buscando el producto…')
+      nombre = await buscarNombre(codigo)
+      setToast(null)
+    } else if (!esUrl) {
+      nombre = leido // QR con texto = nombre directo
     }
+    if (!nombre) nombre = (prompt('No encontré este producto en internet.\nEscribe su nombre (solo esta vez):') || '').trim()
     setTab('inv')
     setPrefill({ nombre, codigo })
   }
