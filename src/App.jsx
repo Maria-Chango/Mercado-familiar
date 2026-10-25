@@ -87,6 +87,11 @@ export default function App() {
     await run(supabase.from('lista_compra_activa').update({ precio_real: v }).eq('id', it.id))
     await run(supabase.from('productos_inventario').update({ ultimo_precio: v }).eq('id', it.producto_id)) // histórico
   }
+  const editarProducto = (id, f) =>
+    run(supabase.from('productos_inventario').update({ ...f, categoria: f.categoria || adivinarCategoria(f.nombre) }).eq('id', id))
+  const eliminarProducto = (p) => {
+    if (confirm(`¿Eliminar "${p.nombre}" del inventario?`)) run(supabase.from('productos_inventario').delete().eq('id', p.id))
+  }
   const limpiarComprados = () => run(supabase.from('lista_compra_activa').delete().eq('comprado', true))
   const agregarProducto = (f) =>
     run(supabase.from('productos_inventario').insert({ ...f, categoria: f.categoria || adivinarCategoria(f.nombre) }))
@@ -146,7 +151,7 @@ export default function App() {
           )}
         </main>
       ) : (
-        <Inventario productos={productos} pendientes={pendientes} onReportar={reportar} onAgregar={agregarProducto} />
+        <Inventario productos={productos} pendientes={pendientes} onReportar={reportar} onAgregar={agregarProducto} onEditar={editarProducto} onEliminar={eliminarProducto} />
       )}
 
       <nav className="fixed inset-x-0 bottom-0 mx-auto grid max-w-md grid-cols-2 gap-2 border-t bg-white p-3" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
@@ -174,33 +179,55 @@ function Bienvenida({ onEntrar }) {
   )
 }
 
-function Inventario({ productos, pendientes, onReportar, onAgregar }) {
+function Inventario({ productos, pendientes, onReportar, onAgregar, onEditar, onEliminar }) {
   const vacio = { nombre: '', cantidad: 1, unidad: 'fundas', ultimo_precio: 0, categoria: '' }
   const [f, setF] = useState(vacio)
+  const [editId, setEditId] = useState(null)
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
   const inp = 'h-12 rounded-xl border-2 border-stone-300 px-3 text-lg'
+
+  const empezarEdicion = (p) => {
+    setF({ nombre: p.nombre, cantidad: p.cantidad, unidad: p.unidad, ultimo_precio: p.ultimo_precio, categoria: p.categoria })
+    setEditId(p.id)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+  const cancelar = () => { setF(vacio); setEditId(null) }
+  const guardar = () => {
+    const d = { ...f, cantidad: +f.cantidad, ultimo_precio: +f.ultimo_precio }
+    editId ? onEditar(editId, d) : onAgregar(d)
+    cancelar()
+  }
+
   return (
     <main className="space-y-4 p-4">
-      <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-3">
+      <div className={`grid grid-cols-2 gap-2 rounded-2xl bg-white p-3 ${editId ? 'border-4 border-amber-400' : ''}`}>
+        {editId && <p className="col-span-2 text-lg font-extrabold text-amber-700">✏️ Editando producto</p>}
         <input className={`${inp} col-span-2`} placeholder="Producto (ej. Harina)" value={f.nombre} onChange={set('nombre')} />
         <label className="text-sm font-bold">Cantidad<input className={`${inp} w-full`} type="number" inputMode="decimal" value={f.cantidad} onChange={set('cantidad')} /></label>
         <label className="text-sm font-bold">Unidad<input className={`${inp} w-full`} placeholder="fundas, libras" value={f.unidad} onChange={set('unidad')} /></label>
         <label className="text-sm font-bold">Precio $ por unidad<input className={`${inp} w-full`} type="number" inputMode="decimal" step="0.01" value={f.ultimo_precio} onChange={set('ultimo_precio')} /></label>
         <label className="text-sm font-bold">Categoría (opcional)<input className={`${inp} w-full`} placeholder="se pone sola" value={f.categoria} onChange={set('categoria')} /></label>
-        <button disabled={!f.nombre.trim()} onClick={() => { onAgregar({ ...f, cantidad: +f.cantidad, ultimo_precio: +f.ultimo_precio }); setF(vacio) }}
-          className="col-span-2 h-14 rounded-2xl bg-green-700 text-lg font-bold text-white disabled:opacity-40">+ Agregar al inventario</button>
+        <button disabled={!f.nombre.trim()} onClick={guardar}
+          className={`h-14 rounded-2xl text-lg font-bold text-white disabled:opacity-40 ${editId ? 'col-span-1 bg-amber-600' : 'col-span-2 bg-green-700'}`}>
+          {editId ? 'Guardar cambios' : '+ Agregar al inventario'}
+        </button>
+        {editId && <button onClick={cancelar} className="h-14 rounded-2xl bg-stone-200 text-lg font-bold">Cancelar</button>}
       </div>
       <ul className="space-y-2">
         {productos.map((p) => (
-          <li key={p.id} className="flex items-center gap-2 rounded-2xl bg-white p-2">
-            <div className="min-w-0 flex-1 pl-2">
+          <li key={p.id} className={`rounded-2xl bg-white p-2 ${editId === p.id ? 'ring-4 ring-amber-400' : ''}`}>
+            <div className="px-2 pb-2">
               <p className="truncate text-lg font-bold">{p.nombre}</p>
               <p className="text-sm text-stone-600">{p.categoria} · {p.cantidad} {p.unidad} · {$(p.ultimo_precio)}</p>
             </div>
-            <button disabled={pendientes.has(p.id)} onClick={() => onReportar(p)}
-              className="h-14 shrink-0 rounded-xl bg-red-600 px-4 text-base font-extrabold text-white disabled:bg-stone-300 disabled:text-stone-500">
-              {pendientes.has(p.id) ? 'En lista' : '¡Se agotó!'}
-            </button>
+            <div className="grid grid-cols-[1fr_auto_auto] gap-2">
+              <button disabled={pendientes.has(p.id)} onClick={() => onReportar(p)}
+                className="h-14 rounded-xl bg-red-600 text-base font-extrabold text-white disabled:bg-stone-300 disabled:text-stone-500">
+                {pendientes.has(p.id) ? 'En lista' : '¡Se agotó!'}
+              </button>
+              <button onClick={() => empezarEdicion(p)} className="h-14 w-14 rounded-xl bg-amber-100 text-2xl" aria-label="Editar">✏️</button>
+              <button onClick={() => onEliminar(p)} className="h-14 w-14 rounded-xl bg-stone-100 text-2xl" aria-label="Eliminar">🗑</button>
+            </div>
           </li>
         ))}
       </ul>
