@@ -277,13 +277,24 @@ function Inventario({ productos, pendientes, onReportar, onAgregar, onEditar, on
 
 function Escaner({ onCodigo, onCerrar }) {
   const [err, setErr] = useState('')
+  const [manual, setManual] = useState('')
   useEffect(() => {
     let sc, activo = true
-    import('html5-qrcode').then(({ Html5Qrcode }) => {
-      sc = new Html5Qrcode('lector')
+    import('html5-qrcode').then(({ Html5Qrcode, Html5QrcodeSupportedFormats: F }) => {
+      sc = new Html5Qrcode('lector', {
+        formatsToSupport: [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39, F.ITF, F.QR_CODE],
+        useBarCodeDetectorIfSupported: true,
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+        verbose: false,
+      })
       sc.start(
         { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 260, height: 160 } },
+        {
+          fps: 15,
+          qrbox: (w, h) => ({ width: Math.floor(w * 0.9), height: Math.floor(Math.min(h * 0.6, 220)) }),
+          videoConstraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+        },
         (txt) => { if (activo) { activo = false; sc.stop().catch(() => {}).finally(() => onCodigo(txt)) } },
         () => {}
       ).catch(() => setErr('No se pudo abrir la cámara. Permite el acceso a la cámara para este sitio.'))
@@ -291,11 +302,17 @@ function Escaner({ onCodigo, onCerrar }) {
     return () => { activo = false; try { sc?.isScanning && sc.stop().catch(() => {}) } catch {} }
   }, [])
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-black/80 p-4">
+    <div className="fixed inset-0 z-30 grid place-items-center overflow-y-auto bg-black/80 p-4">
       <div className="w-full max-w-md rounded-3xl bg-white p-4">
-        <p className="mb-2 text-xl font-extrabold">📷 Apunta al código de barras o QR</p>
+        <p className="mb-1 text-xl font-extrabold">📷 Apunta al código de barras o QR</p>
+        <p className="mb-2 text-sm text-stone-600">Buena luz, a unos 10–15 cm, código horizontal y quieto.</p>
         <div id="lector" className="overflow-hidden rounded-2xl" />
         {err && <p className="mt-2 font-bold text-red-700">{err}</p>}
+        <div className="mt-3 flex gap-2">
+          <input value={manual} onChange={(e) => setManual(e.target.value.trim())} inputMode="numeric" placeholder="O escribe el número del código"
+            className="h-12 min-w-0 flex-1 rounded-xl border-2 border-stone-300 px-3 text-lg" />
+          <button disabled={!manual} onClick={() => onCodigo(manual)} className="h-12 rounded-xl bg-green-700 px-4 font-bold text-white disabled:opacity-40">Usar</button>
+        </div>
         <button onClick={onCerrar} className="mt-3 h-14 w-full rounded-2xl bg-stone-800 text-lg font-bold text-white">Cerrar</button>
       </div>
     </div>
